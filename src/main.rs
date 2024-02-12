@@ -75,7 +75,7 @@ impl Ray {
         Self {origin, direction}
     }
 
-    fn _at(&self, t: f32) -> Point {
+    fn at(&self, t: f32) -> Point {
         self.origin + (t * self.direction)
     }
 }
@@ -90,13 +90,26 @@ impl Sphere {
         Self {center, radius}
     }
 
-    fn intersection(&self, ray: &Ray) -> bool {
+    ///Returns value of closest intersection, if exists
+    fn intersection(&self, ray: &Ray) -> Option<f32> {
         let dif = ray.origin.clone() - self.center;
         let a = ray.direction.norm_squared();
         let b = 2.0 * ray.direction.dot(&dif);
         let c = dif.norm_squared() - self.radius * self.radius;
 
-        b * b - 4.0 * a * c >= 0.0
+        let disc = b * b - 4.0 * a * c;
+
+        if disc >= 0.0 {
+            Some((-b - disc.sqrt()) / (2.0 * a))
+        } else {
+            None
+        }
+    }
+
+    //Calculates unit vector (assuming given point on surface)
+    fn unit_vector<'a>(&'a self, point: &'a mut Point) -> &mut Point {
+        *point = (*point - self.center) / self.radius;
+        point
     }
 }
 
@@ -107,9 +120,14 @@ fn color_to_rgb(color: Color) -> image::Rgb<u8> {
 }
 
 fn ray_color(ray: &Ray, sphere: &Sphere) -> Color {
-    if sphere.intersection(ray) {
-        return vector![1.0,0.0,0.0];
-    }
+    match sphere.intersection(ray) {
+        Some(t) => { 
+            let n = *sphere.unit_vector(&mut ray.at(t));
+            return (n + vector![1.0,1.0,1.0]) / 2.0;
+        },
+        _ => (),
+    }; 
+
     let unit_direction = ray.direction / ray.direction.norm();
     let a = 0.5 * (unit_direction.y + 1.0);
     vector![1.0,1.0,1.0].lerp(&vector![0.5,0.7,1.0], a)
