@@ -86,7 +86,7 @@ impl Ray {
 }
 
 trait Hitable {
-    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord) -> bool;
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool;
 }
 
 struct HitableCollection {
@@ -109,13 +109,13 @@ impl HitableCollection {
 }
 
 impl Hitable for HitableCollection {
-    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord) -> bool {
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool {
         let mut temp_rec = HitRecord::default();
         let mut hit_anything = false;
-        let mut closest_current = t_max;
+        let mut closest_current = t_interval.max;
 
         self.objects.iter().for_each(|x| {
-            if x.hit(ray, t_min, closest_current, &mut temp_rec) {
+            if x.hit(ray,Interval::new(t_interval.min,closest_current), &mut temp_rec) {
                 hit_anything = true;
                 closest_current = temp_rec.t;
                 *rec = temp_rec.clone();
@@ -162,7 +162,7 @@ impl Sphere {
 
 impl Hitable for Sphere
 {
-    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord) -> bool {
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool {
         let dif = ray.origin.clone() - self.center;
 
         let a = ray.direction.norm_squared();
@@ -173,9 +173,9 @@ impl Hitable for Sphere
         if disc < 0.0 {return false;}
 
         let mut root = (-half_b - disc.sqrt()) / a;
-        if root <= t_min || root >= t_max {
+        if !(t_interval.surrounds(root)){
             root = (-half_b + disc.sqrt()) / a;
-            if root <= t_min || root >= t_max {
+            if !(t_interval.surrounds(root)){
                 return false;
             }
         }
@@ -214,7 +214,7 @@ fn color_to_rgb(color: Color) -> image::Rgb<u8> {
 
 fn ray_color(ray: &Ray, hitable: &dyn Hitable) -> Color {
     let mut hit_record = HitRecord::default();
-    if hitable.hit(ray, 0.0, f32::INFINITY, &mut hit_record) {
+    if hitable.hit(ray, Interval::new(0.0, f32::INFINITY), &mut hit_record) {
         return (hit_record.normal + vector![1.0,1.0,1.0]) / 2.0;
     };
 
@@ -222,3 +222,32 @@ fn ray_color(ray: &Ray, hitable: &dyn Hitable) -> Color {
     let a = 0.5 * (unit_direction.y + 1.0);
     vector![1.0,1.0,1.0].lerp(&vector![0.5,0.7,1.0], a)
 }
+
+
+struct Interval {
+    pub min: f32,
+    pub max: f32,
+}
+
+impl Interval {
+    fn new(min: f32, max: f32) -> Self {
+        Self{min, max}
+    }
+
+    fn default() -> Self {
+        let min = f32::INFINITY;
+        let max = -f32::INFINITY;
+        Self{min,max}
+    }
+
+    fn contains(&self, x: f32) -> bool {
+        (self.min <= x) && (x <= self.max)
+    }
+
+    fn surrounds(&self, x: f32) -> bool {
+        (self.min < x) && (x < self.max)
+    }
+}
+
+const empty: Interval =  Interval{min: f32::INFINITY, max:-f32::INFINITY};
+const universal: Interval =  Interval{min:-f32::INFINITY, max:f32::INFINITY};
