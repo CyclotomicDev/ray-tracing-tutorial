@@ -1,4 +1,6 @@
 use nalgebra::{Vector3, vector};
+use std::rc::Rc;
+
 
 fn main() {
     //Image 
@@ -8,6 +10,11 @@ fn main() {
     //Calculate image height: 1) round down 2) ensure at least 1
     let image_height = (image_width as f32/ aspect_ratio) as i32;
     let image_height: u32 = if image_height < 1 {1} else {image_height as u32};
+
+    //World
+    let mut world = HitableCollection::new();
+    world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5)));
+    world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0)));
 
     //Camera
     let focal_length = 1.0;
@@ -37,8 +44,6 @@ fn main() {
 
     //Render
     let mut imgbuf = image::ImageBuffer::new(image_width, image_height);
-
-    let sphere = Sphere::new(vector![0.0,0.0,-1.0], 0.5);
     
     for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
         let pixel_center = pixel_start + (x as f32 * pixel_delta_u) + (y as f32 * pixel_delta_v);
@@ -46,7 +51,7 @@ fn main() {
 
         let ray = Ray::new(camera_center, ray_direction);
 
-        *pixel = color_to_rgb(ray_color(&ray,&sphere));
+        *pixel = color_to_rgb(ray_color(&ray,&world));
     }
 
     imgbuf.save("image.png").unwrap();
@@ -80,6 +85,47 @@ impl Ray {
     }
 }
 
+trait Hitable {
+    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord) -> bool;
+}
+
+struct HitableCollection {
+    objects: Vec<Rc<dyn Hitable>>,
+}
+
+impl HitableCollection {
+    fn new() -> Self {
+        let objects = Vec::new();
+        Self{objects}
+    }
+
+    fn push(&mut self, object:  Rc<dyn Hitable>) {
+        self.objects.push(object);
+    }
+
+    fn clear(&mut self) {
+        self.objects.clear();
+    }
+}
+
+impl Hitable for HitableCollection {
+    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord) -> bool {
+        let mut temp_rec = HitRecord::default();
+        let mut hit_anything = false;
+        let mut closest_current = t_max;
+
+        self.objects.iter().for_each(|x| {
+            if x.hit(ray, t_min, closest_current, &mut temp_rec) {
+                hit_anything = true;
+                closest_current = temp_rec.t;
+                *rec = temp_rec.clone();
+            }
+        });
+
+        hit_anything
+    }
+}
+
 struct Sphere {
     pub center: Point,
     pub radius: f32,
@@ -90,17 +136,18 @@ impl Sphere {
         Self {center, radius}
     }
 
+    /*
     ///Returns value of closest intersection, if exists
     fn intersection(&self, ray: &Ray) -> Option<f32> {
         let dif = ray.origin.clone() - self.center;
         let a = ray.direction.norm_squared();
-        let b = 2.0 * ray.direction.dot(&dif);
+        let half_b = ray.direction.dot(&dif);
         let c = dif.norm_squared() - self.radius * self.radius;
 
-        let disc = b * b - 4.0 * a * c;
+        let disc = half_b * half_b - a * c;
 
         if disc >= 0.0 {
-            Some((-b - disc.sqrt()) / (2.0 * a))
+            Some((-half_b - disc.sqrt()) / a)
         } else {
             None
         }
@@ -110,6 +157,52 @@ impl Sphere {
     fn unit_vector<'a>(&'a self, point: &'a mut Point) -> &mut Point {
         *point = (*point - self.center) / self.radius;
         point
+    }*/
+}
+
+impl Hitable for Sphere
+{
+    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32, rec: &mut HitRecord) -> bool {
+        let dif = ray.origin.clone() - self.center;
+
+        let a = ray.direction.norm_squared();
+        let half_b = ray.direction.dot(&dif);
+        let c = dif.norm_squared() - (self.radius * self.radius);
+
+        let disc = half_b * half_b - a * c;
+        if disc < 0.0 {return false;}
+
+        let mut root = (-half_b - disc.sqrt()) / a;
+        if root <= t_min || root >= t_max {
+            root = (-half_b + disc.sqrt()) / a;
+            if root <= t_min || root >= t_max {
+                return false;
+            }
+        }
+
+        rec.t = root;
+        rec.point = ray.at(rec.t);
+        let outward_normal = (rec.point - self.center) / self.radius;
+        rec.set_face_normal(ray, &outward_normal);
+
+        return true;
+    }
+}
+#[derive(Clone,Default)]
+struct HitRecord {
+    pub point: Point,
+    pub normal: Direction,
+    pub t: f32,
+    pub front_face: bool,
+}
+
+impl HitRecord {
+
+    fn set_face_normal(&mut self, ray: &Ray, outward_normal: &Direction) {
+        //Sets hit record for normal vector
+
+        self.front_face = ray.direction.dot(outward_normal) < 0.0;
+        self.normal = if self.front_face {outward_normal.clone()} else {-outward_normal.clone()};
     }
 }
 
@@ -119,14 +212,11 @@ fn color_to_rgb(color: Color) -> image::Rgb<u8> {
     image::Rgb([color[0] as u8, color[1] as u8, color[2] as u8])
 }
 
-fn ray_color(ray: &Ray, sphere: &Sphere) -> Color {
-    match sphere.intersection(ray) {
-        Some(t) => { 
-            let n = *sphere.unit_vector(&mut ray.at(t));
-            return (n + vector![1.0,1.0,1.0]) / 2.0;
-        },
-        _ => (),
-    }; 
+fn ray_color(ray: &Ray, hitable: &dyn Hitable) -> Color {
+    let mut hit_record = HitRecord::default();
+    if hitable.hit(ray, 0.0, f32::INFINITY, &mut hit_record) {
+        return (hit_record.normal + vector![1.0,1.0,1.0]) / 2.0;
+    };
 
     let unit_direction = ray.direction / ray.direction.norm();
     let a = 0.5 * (unit_direction.y + 1.0);
