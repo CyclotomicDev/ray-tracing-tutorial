@@ -226,6 +226,7 @@ struct Camera {
     pixel_delta_v: Vector3<f32>,
     samples_per_pixel: usize,
     rng: ThreadRng,
+    max_depth: usize,
 }
 
 impl Camera {
@@ -263,7 +264,9 @@ impl Camera {
 
         let rng = rand::thread_rng();
 
-        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng}
+        let max_depth = 50;
+
+        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng, max_depth}
     }
 
     fn render(&mut self, world: &dyn Hittable) {
@@ -279,7 +282,7 @@ impl Camera {
 
             let result = (0..(self.samples_per_pixel)).map(|_| {
                 let ray = self.get_ray(x, y);
-                self.ray_color(&ray, world)
+                self.ray_color(self.max_depth, &ray, world)
             }).fold(Vector3::<f32>::default(), |acc, x| acc + x) 
             / (self.samples_per_pixel as f32);
 
@@ -292,12 +295,16 @@ impl Camera {
     }
 
     
-    fn ray_color(&mut self, ray: &Ray, hittable: &dyn Hittable) -> Color {
+    fn ray_color(&mut self, depth: usize, ray: &Ray, hittable: &dyn Hittable) -> Color {
         let mut hit_record = HitRecord::default();
 
-        if hittable.hit(ray, Interval::new(0.0, f32::INFINITY), &mut hit_record) {
-            let direction = get_random_vec_hemi(&mut self.rng, &hit_record.normal);
-            return self.ray_color(&Ray::new(hit_record.point, direction), hittable) / 2.0;
+        if depth <= 0 {
+            return vector![0.0, 0.0, 0.0];
+        }
+
+        if hittable.hit(ray, Interval::new(0.001, f32::INFINITY), &mut hit_record) {
+            let direction = &hit_record.normal + get_random_vec(&mut self.rng);
+            return 0.5 * self.ray_color(depth - 1, &Ray::new(hit_record.point, direction),  hittable);
         };
 
         let unit_direction = ray.direction / ray.direction.norm();
@@ -310,10 +317,13 @@ impl Camera {
         let pixel_center = self.pixel_start + ((i as f32) * self.pixel_delta_u + (j as f32) * self.pixel_delta_v);
         let pixel_sample = pixel_center + self.pixel_sample_square();
 
-        Ray::new(self.center, pixel_sample - self.center)
+        let ray_origin = self.center;
+        let ray_direction = pixel_sample - ray_origin;
+
+        Ray::new(ray_origin, ray_direction)
     }
 
-    //Returns a random point in square surrounding origin of pixel
+    ///Returns a random point in square surrounding origin of pixel
     fn pixel_sample_square(&mut self) -> Vector3<f32> {
         let px = -0.5 + self.rng.gen::<f32>();
         let py = -0.5 + self.rng.gen::<f32>();
