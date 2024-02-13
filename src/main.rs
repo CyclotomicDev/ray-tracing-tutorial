@@ -168,7 +168,8 @@ fn color_to_rgb(color: Color) -> image::Rgb<u8> {
 
     //let result: Vector3<f32> = colors.iter().fold(Vector3::<f32>::default(), |acc, x| acc + x) / (colors.len() as f32);
 
-    let result = color;
+    let mut result = color;
+    result.iter_mut().for_each(|x: &mut f32| linear_to_gamma(x));
 
     static intensity: Interval = Interval{min:0.0, max:0.999};
 
@@ -352,4 +353,8 @@ fn get_random_vec_hemi(rng: &mut ThreadRng, normal: &Vector3<f32>) -> Vector3<f3
     } else {
         -on_unit_sphere
     }
+}
+
+fn linear_to_gamma(component: &mut f32) {
+    *component = component.sqrt();
 }
