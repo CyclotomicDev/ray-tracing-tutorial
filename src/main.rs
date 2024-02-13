@@ -1,5 +1,5 @@
 use nalgebra::{Vector3, vector};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use rand::prelude::*;
 
 fn main() {
@@ -7,8 +7,17 @@ fn main() {
 
     //World
     let mut world = HittableCollection::new();
-    world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5)));
-    world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0)));
+
+    let matterial_ground = Rc::new(Lambertian::new(&vector![0.8,0.8,0.0]));
+    let matterial_center = Rc::new(Lambertian::new(&vector![0.7,0.3,0.3]));
+    let matterial_left = Rc::new(Metal::new(&vector![0.8,0.8,0.8]));
+    let matterial_right = Rc::new(Metal::new(&vector![0.8,0.6,0.2]));
+
+
+    world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5, matterial_ground)));
+    world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0, matterial_center)));
+    world.push(Rc::new(Sphere::new(vector![-1.0,0.0,-1.0], 0.5, matterial_left)));
+    world.push(Rc::new(Sphere::new(vector![1.0, 0.0,-1.0], 0.5, matterial_right)));
     
     let mut camera = Camera::new(16.0 / 9.0, 400);
     
@@ -20,14 +29,7 @@ type Direction = Vector3<f32>;
 type Color = Vector3<f32>;
 
 /// Simple line in 3D space
-/// 
-/// #Examples
-/// 
-/// ```
-/// let line = Ray::new(vector![1.0,2.0,3.0], vector![1.0,0.0,1.0]);
-/// 
-/// assert_eq!(vector![3.0, 2.0, 5.0], line.at(2.0));
-/// ```
+#[derive(Default)]
 struct Ray {
     pub origin: Point,
     pub direction: Direction,
@@ -44,7 +46,7 @@ impl Ray {
 }
 
 trait Hittable {
-    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool;
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Rc<dyn Material>>) -> bool;
 }
 
 struct HittableCollection {
@@ -61,19 +63,21 @@ impl HittableCollection {
         self.objects.push(object);
     }
 
-    fn clear(&mut self) {
+    fn _clear(&mut self) {
         self.objects.clear();
     }
 }
 
 impl Hittable for HittableCollection {
-    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool {
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Rc<dyn Material>>) -> bool {
         let mut temp_rec = HitRecord::default();
         let mut hit_anything = false;
         let mut closest_current = t_interval.max;
 
+        *material = None;
+
         self.objects.iter().for_each(|x| {
-            if x.hit(ray,Interval::new(t_interval.min,closest_current), &mut temp_rec) {
+            if x.hit(ray,Interval::new(t_interval.min,closest_current), &mut temp_rec, material) {
                 hit_anything = true;
                 closest_current = temp_rec.t;
                 *rec = temp_rec.clone();
@@ -87,40 +91,18 @@ impl Hittable for HittableCollection {
 struct Sphere {
     pub center: Point,
     pub radius: f32,
+    pub material: Rc<dyn Material>,
 }
 
 impl Sphere {
-    fn new(center: Point, radius: f32) -> Self {
-        Self {center, radius}
+    fn new(center: Point, radius: f32, material: Rc<dyn Material>) -> Self {
+        Self {center, radius, material}
     }
-
-    /*
-    ///Returns value of closest intersection, if exists
-    fn intersection(&self, ray: &Ray) -> Option<f32> {
-        let dif = ray.origin.clone() - self.center;
-        let a = ray.direction.norm_squared();
-        let half_b = ray.direction.dot(&dif);
-        let c = dif.norm_squared() - self.radius * self.radius;
-
-        let disc = half_b * half_b - a * c;
-
-        if disc >= 0.0 {
-            Some((-half_b - disc.sqrt()) / a)
-        } else {
-            None
-        }
-    }
-
-    //Calculates unit vector (assuming given point on surface)
-    fn unit_vector<'a>(&'a self, point: &'a mut Point) -> &mut Point {
-        *point = (*point - self.center) / self.radius;
-        point
-    }*/
 }
 
 impl Hittable for Sphere
 {
-    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool {
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Rc<dyn Material>>) -> bool {
         let dif = ray.origin.clone() - self.center;
 
         let a = ray.direction.norm_squared();
@@ -143,6 +125,8 @@ impl Hittable for Sphere
         let outward_normal = (rec.point - self.center) / self.radius;
         rec.set_face_normal(ray, &outward_normal);
 
+        *material = Some(Rc::clone(&self.material));
+
         return true;
     }
 }
@@ -150,9 +134,12 @@ impl Hittable for Sphere
 struct HitRecord {
     pub point: Point,
     pub normal: Direction,
+    //pub material: Option<Weak<dyn Material>>,
     pub t: f32,
     pub front_face: bool,
 }
+
+struct  HitObserver(HitRecord,Option<Weak<dyn Material>>);
 
 impl HitRecord {
 
@@ -303,9 +290,21 @@ impl Camera {
             return vector![0.0, 0.0, 0.0];
         }
 
-        if hittable.hit(ray, Interval::new(0.001, f32::INFINITY), &mut hit_record) {
-            let direction = &hit_record.normal + get_random_vec(&mut self.rng);
-            return 0.5 * self.ray_color(depth - 1, &Ray::new(hit_record.point, direction),  hittable);
+        let mut material: Option<Rc<dyn Material>> = None;
+
+        if hittable.hit(ray, Interval::new(0.001, f32::INFINITY), &mut hit_record, &mut material) {
+            let mut scattered = Ray::default();
+            let mut attenuation = Color::default();
+
+            let hit_record = hit_record;
+
+            if material.unwrap().scatter(ray, &hit_record, &mut attenuation, &mut scattered, &mut self.rng) {
+                let temp = &self.ray_color(depth - 1, &scattered, hittable);
+                return attenuation.component_mul(temp);
+                
+            } else {
+                return vector![0.0,0.0,0.0];
+            };
         };
 
         let unit_direction = ray.direction / ray.direction.norm();
@@ -357,4 +356,65 @@ fn get_random_vec_hemi(rng: &mut ThreadRng, normal: &Vector3<f32>) -> Vector3<f3
 
 fn linear_to_gamma(component: &mut f32) {
     *component = component.sqrt();
+}
+
+trait Material {
+    fn scatter(&self, ray: &Ray, hit_record: &HitRecord, attenuation: &mut Color, scattered: &mut Ray, rng: &mut ThreadRng) -> bool;
+}
+
+struct Lambertian {
+    albedo: Color,
+    //rng: ThreadRng,
+}
+
+impl Lambertian {
+    fn new(albedo: &Color) -> Self {
+        let albedo = albedo.clone();
+        Self {albedo}
+    }
+}
+
+impl Material for Lambertian {
+    fn scatter(&self, _ray: &Ray, hit_record: &HitRecord, attenuation: &mut Color, scattered: &mut Ray, rng: &mut ThreadRng) -> bool {
+        let mut scatter_direction = hit_record.normal + get_random_unit(rng);
+
+        //Catch degenerate scatter direction
+        let s = 1e-8;
+        if scatter_direction.norm() < s {
+            scatter_direction = hit_record.normal;
+        }
+
+        *scattered = Ray::new(hit_record.point, scatter_direction);
+        *attenuation = self.albedo;
+        true
+    }
+}
+
+fn reflect(v: &Direction, n: &Direction) -> Direction {
+    v.clone() - 2.0 * v.dot(n) * n
+}
+
+fn vec_unit(v: &Direction) -> Direction {
+    let v = v / v.norm();
+    v
+}
+
+struct Metal {
+    albedo: Color,
+}
+
+impl Metal {
+    fn new(albedo: &Color) -> Self {
+        let albedo = albedo.clone();
+        Self{albedo}
+    }
+}
+
+impl Material for Metal {
+    fn scatter(&self, ray: &Ray, hit_record: &HitRecord, attenuation: &mut Color, scattered: &mut Ray, _rng: &mut ThreadRng) -> bool {
+        let reflected = reflect(&vec_unit(&ray.direction), &hit_record.normal);
+        *scattered = Ray::new(hit_record.point, reflected);
+        *attenuation = self.albedo;
+        true
+    }
 }
