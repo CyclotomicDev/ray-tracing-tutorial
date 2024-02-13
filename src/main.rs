@@ -1,6 +1,7 @@
 use nalgebra::{Vector3, vector};
 use std::rc::{Rc, Weak};
 use rand::prelude::*;
+use std::cmp::min;
 
 fn main() {
     
@@ -9,13 +10,13 @@ fn main() {
     let mut world = HittableCollection::new();
 
     let matterial_ground = Rc::new(Lambertian::new(&vector![0.8,0.8,0.0]));
-    let matterial_center = Rc::new(Lambertian::new(&vector![0.7,0.3,0.3]));
-    let matterial_left = Rc::new(Metal::new(&vector![0.8,0.8,0.8]));
-    let matterial_right = Rc::new(Metal::new(&vector![0.8,0.6,0.2]));
+    let matterial_center = Rc::new(Dielectric::new(1.5));
+    let matterial_left = Rc::new(Dielectric::new(1.5));
+    let matterial_right = Rc::new(Metal::new(&vector![0.8,0.6,0.2], 1.0));
 
 
-    world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5, matterial_ground)));
-    world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0, matterial_center)));
+    world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5,  matterial_center )));
+    world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0, matterial_ground)));
     world.push(Rc::new(Sphere::new(vector![-1.0,0.0,-1.0], 0.5, matterial_left)));
     world.push(Rc::new(Sphere::new(vector![1.0, 0.0,-1.0], 0.5, matterial_right)));
     
@@ -394,6 +395,14 @@ fn reflect(v: &Direction, n: &Direction) -> Direction {
     v.clone() - 2.0 * v.dot(n) * n
 }
 
+fn refract(vecIn: &Direction, normal: &Direction, coeffIn: f32, coeffOut: f32) -> Direction{
+    let ratio = coeffIn / coeffOut;
+    let cos_theta = (vecIn.dot(normal)).min(1.0);
+    let vecOut_perp = ratio * (vecIn - cos_theta * normal);
+    let vecOut_para = -(1.0 - vecOut_perp.norm_squared()).sqrt() * normal;
+    vecOut_perp + vecOut_para
+}
+
 fn vec_unit(v: &Direction) -> Direction {
     let v = v / v.norm();
     v
@@ -401,20 +410,45 @@ fn vec_unit(v: &Direction) -> Direction {
 
 struct Metal {
     albedo: Color,
+    fuzz: f32,
 }
 
 impl Metal {
-    fn new(albedo: &Color) -> Self {
+    fn new(albedo: &Color, fuzz: f32) -> Self {
         let albedo = albedo.clone();
-        Self{albedo}
+        Self{albedo, fuzz}
     }
 }
 
 impl Material for Metal {
-    fn scatter(&self, ray: &Ray, hit_record: &HitRecord, attenuation: &mut Color, scattered: &mut Ray, _rng: &mut ThreadRng) -> bool {
+    fn scatter(&self, ray: &Ray, hit_record: &HitRecord, attenuation: &mut Color, scattered: &mut Ray, rng: &mut ThreadRng) -> bool {
         let reflected = reflect(&vec_unit(&ray.direction), &hit_record.normal);
-        *scattered = Ray::new(hit_record.point, reflected);
+        *scattered = Ray::new(hit_record.point, reflected + self.fuzz * get_random_unit(rng));
         *attenuation = self.albedo;
+        scattered.direction.dot(&hit_record.normal) > 0.0
+    }
+}
+
+struct Dielectric {
+    index_of_refraction: f32,
+}
+
+impl Dielectric {
+    fn new(index_of_refraction: f32) -> Self {
+        Self {index_of_refraction}
+    }
+}
+
+impl Material for Dielectric {
+    fn scatter(&self, ray: &Ray, hit_record: &HitRecord, attenuation: &mut Color, scattered: &mut Ray, rng: &mut ThreadRng) -> bool {
+        *attenuation = vector![1.0,1.0,1.0];
+        let refraction_ratio = if hit_record.front_face {1.0 / self.index_of_refraction} else {self.index_of_refraction};
+
+        let unit_direction = vec_unit(&ray.direction);
+        let refracted = refract(&unit_direction, &hit_record.normal, refraction_ratio,1.0);
+
+        *scattered = Ray::new(hit_record.point, refracted);
         true
     }
 }
+
