@@ -2,7 +2,6 @@ use nalgebra::{Vector3, vector};
 use std::rc::Rc;
 use rand::prelude::*;
 
-
 fn main() {
     
 
@@ -280,7 +279,7 @@ impl Camera {
 
             let result = (0..(self.samples_per_pixel)).map(|_| {
                 let ray = self.get_ray(x, y);
-                Camera::ray_color(&ray, world)
+                self.ray_color(&ray, world)
             }).fold(Vector3::<f32>::default(), |acc, x| acc + x) 
             / (self.samples_per_pixel as f32);
 
@@ -293,11 +292,12 @@ impl Camera {
     }
 
     
-    fn ray_color(ray: &Ray, hittable: &dyn Hittable) -> Color {
+    fn ray_color(&mut self, ray: &Ray, hittable: &dyn Hittable) -> Color {
         let mut hit_record = HitRecord::default();
 
         if hittable.hit(ray, Interval::new(0.0, f32::INFINITY), &mut hit_record) {
-            return (hit_record.normal + vector![1.0,1.0,1.0]) / 2.0;
+            let direction = get_random_vec_hemi(&mut self.rng, &hit_record.normal);
+            return self.ray_color(&Ray::new(hit_record.point, direction), hittable) / 2.0;
         };
 
         let unit_direction = ray.direction / ray.direction.norm();
@@ -318,5 +318,28 @@ impl Camera {
         let px = -0.5 + self.rng.gen::<f32>();
         let py = -0.5 + self.rng.gen::<f32>();
         px * self.pixel_delta_u + py * self.pixel_delta_v
+    }
+}
+
+
+fn get_random_vec(rng: &mut ThreadRng) -> Vector3<f32> {
+    vector![rng.gen(), rng.gen(), rng.gen()]
+}
+
+fn get_random_unit(rng: &mut ThreadRng) -> Vector3<f32> {
+    loop {
+        let p = get_random_vec(rng);
+        if p.norm() < 1.0 {
+            return p
+        }
+    }
+}
+
+fn get_random_vec_hemi(rng: &mut ThreadRng, normal: &Vector3<f32>) -> Vector3<f32> {
+    let on_unit_sphere = get_random_unit(rng);
+    if on_unit_sphere.dot(normal) > 0.0 {
+        on_unit_sphere
+    } else {
+        -on_unit_sphere
     }
 }
