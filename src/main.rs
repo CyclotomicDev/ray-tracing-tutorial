@@ -1,5 +1,6 @@
 use nalgebra::{Vector3, vector};
 use std::rc::Rc;
+use rand::prelude::*;
 
 
 fn main() {
@@ -10,7 +11,7 @@ fn main() {
     world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5)));
     world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0)));
     
-    let camera = Camera::new(16.0 / 9.0, 400);
+    let mut camera = Camera::new(16.0 / 9.0, 400);
     
     camera.render(&world);
 }
@@ -165,9 +166,18 @@ impl HitRecord {
 }
 
 fn color_to_rgb(color: Color) -> image::Rgb<u8> {
-    let a = 255.999; 
-    let color = a * color;
-    image::Rgb([color[0] as u8, color[1] as u8, color[2] as u8])
+
+    //let result: Vector3<f32> = colors.iter().fold(Vector3::<f32>::default(), |acc, x| acc + x) / (colors.len() as f32);
+
+    let result = color;
+
+    static intensity: Interval = Interval{min:0.0, max:0.999};
+
+    image::Rgb([
+        (256.0 * intensity.clamp(result[0])) as u8,
+        (256.0 * intensity.clamp(result[1])) as u8,
+        (256.0 * intensity.clamp(result[2])) as u8,
+    ])
 }
 
 
@@ -195,6 +205,12 @@ impl Interval {
     fn surrounds(&self, x: f32) -> bool {
         (self.min < x) && (x < self.max)
     }
+
+    fn clamp(&self, x: f32) -> f32 {
+        if x < self.min {self.min}
+        else if x > self.max {self.max}
+        else {x}
+    }
 }
 
 const empty: Interval =  Interval{min: f32::INFINITY, max:-f32::INFINITY};
@@ -209,6 +225,8 @@ struct Camera {
     pixel_start: Vector3<f32>,
     pixel_delta_u: Vector3<f32>,
     pixel_delta_v: Vector3<f32>,
+    samples_per_pixel: usize,
+    rng: ThreadRng,
 }
 
 impl Camera {
@@ -242,31 +260,36 @@ impl Camera {
         let pixel_start =
             viewport_start + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v}
+        let samples_per_pixel = 100;
+
+        let rng = rand::thread_rng();
+
+        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng}
     }
 
-    fn render(&self, world: &dyn Hittable) {
-        //Render
+    fn render(&mut self, world: &dyn Hittable) {
+
         let mut imgbuf = image::ImageBuffer::new(self.image_width, self.image_height);
         
         println!("Started generating image of size {} * {}",self.image_width, self.image_height);
 
         for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-            let pixel_center = self.pixel_start + (x as f32 * self.pixel_delta_u) + (y as f32 * self.pixel_delta_v);
-            let ray_direction: Direction = pixel_center - self.center;
+            if x == 0 && y % 10 == 0 {
+                println!("({} {})",x,y);
+            }
 
-            let ray = Ray::new(self.center, ray_direction);
+            let result = (0..(self.samples_per_pixel)).map(|_| {
+                let ray = self.get_ray(x, y);
+                Camera::ray_color(&ray, world)
+            }).fold(Vector3::<f32>::default(), |acc, x| acc + x) 
+            / (self.samples_per_pixel as f32);
 
-            *pixel = color_to_rgb(Camera::ray_color(&ray,world));
+            *pixel = color_to_rgb(result);
         }
 
         imgbuf.save("image.png").unwrap();
 
         println!("Finished generating");
-    }
-
-    fn initialize(&self) {
-
     }
 
     
@@ -281,4 +304,19 @@ impl Camera {
         let a = 0.5 * (unit_direction.y + 1.0);
         vector![1.0,1.0,1.0].lerp(&vector![0.5,0.7,1.0], a)
     } 
+
+    ///Get randomly sample ray from camera at pixel location
+    fn get_ray(&mut self, i: u32, j: u32) -> Ray {
+        let pixel_center = self.pixel_start + ((i as f32) * self.pixel_delta_u + (j as f32) * self.pixel_delta_v);
+        let pixel_sample = pixel_center + self.pixel_sample_square();
+
+        Ray::new(self.center, pixel_sample - self.center)
+    }
+
+    //Returns a random point in square surrounding origin of pixel
+    fn pixel_sample_square(&mut self) -> Vector3<f32> {
+        let px = -0.5 + self.rng.gen::<f32>();
+        let py = -0.5 + self.rng.gen::<f32>();
+        px * self.pixel_delta_u + py * self.pixel_delta_v
+    }
 }
