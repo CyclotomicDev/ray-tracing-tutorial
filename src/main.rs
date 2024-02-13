@@ -3,58 +3,16 @@ use std::rc::Rc;
 
 
 fn main() {
-    //Image 
-    let aspect_ratio = 16.0 / 9.0;
-    let image_width = 400;
-
-    //Calculate image height: 1) round down 2) ensure at least 1
-    let image_height = (image_width as f32/ aspect_ratio) as i32;
-    let image_height: u32 = if image_height < 1 {1} else {image_height as u32};
+    
 
     //World
-    let mut world = HitableCollection::new();
+    let mut world = HittableCollection::new();
     world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5)));
     world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0)));
-
-    //Camera
-    let focal_length = 1.0;
-    let viewport_height = 2.0;
-    let viewport_width = viewport_height * ((image_width as f32) / (image_height as f32));
-    let camera_center = vector![0.0,0.0,0.0];
-
-    //Calculate vectors across the horizontal and down vertical viewport edges
-    let viewport_u: Point = vector![viewport_width, 0.0, 0.0];
-    let viewport_v: Point = vector![0.0, -viewport_height, 0.0];
-
-    //Calculate horizontal and vertical delta (pixel size)
-    let pixel_delta_u: Direction = viewport_u / (image_width as f32);
-    let pixel_delta_v: Direction = viewport_v / (image_height as f32);
-
-    //Calculate location of upper left pixel
-    let viewport_start = 
-        camera_center.clone()
-        - vector![0.0, 0.0, focal_length]
-        - (viewport_u / 2.0)
-        - (viewport_v / 2.0);
-
-    let pixel_start =
-        viewport_start + 0.5 * (pixel_delta_u + pixel_delta_v);
-
-        
-
-    //Render
-    let mut imgbuf = image::ImageBuffer::new(image_width, image_height);
     
-    for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-        let pixel_center = pixel_start + (x as f32 * pixel_delta_u) + (y as f32 * pixel_delta_v);
-        let ray_direction: Direction = pixel_center - camera_center;
-
-        let ray = Ray::new(camera_center, ray_direction);
-
-        *pixel = color_to_rgb(ray_color(&ray,&world));
-    }
-
-    imgbuf.save("image.png").unwrap();
+    let camera = Camera::new(16.0 / 9.0, 400);
+    
+    camera.render(&world);
 }
 
 type Point = Vector3<f32>;
@@ -85,21 +43,21 @@ impl Ray {
     }
 }
 
-trait Hitable {
+trait Hittable {
     fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool;
 }
 
-struct HitableCollection {
-    objects: Vec<Rc<dyn Hitable>>,
+struct HittableCollection {
+    objects: Vec<Rc<dyn Hittable>>,
 }
 
-impl HitableCollection {
+impl HittableCollection {
     fn new() -> Self {
         let objects = Vec::new();
         Self{objects}
     }
 
-    fn push(&mut self, object:  Rc<dyn Hitable>) {
+    fn push(&mut self, object:  Rc<dyn Hittable>) {
         self.objects.push(object);
     }
 
@@ -108,7 +66,7 @@ impl HitableCollection {
     }
 }
 
-impl Hitable for HitableCollection {
+impl Hittable for HittableCollection {
     fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool {
         let mut temp_rec = HitRecord::default();
         let mut hit_anything = false;
@@ -160,7 +118,7 @@ impl Sphere {
     }*/
 }
 
-impl Hitable for Sphere
+impl Hittable for Sphere
 {
     fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord) -> bool {
         let dif = ray.origin.clone() - self.center;
@@ -212,16 +170,6 @@ fn color_to_rgb(color: Color) -> image::Rgb<u8> {
     image::Rgb([color[0] as u8, color[1] as u8, color[2] as u8])
 }
 
-fn ray_color(ray: &Ray, hitable: &dyn Hitable) -> Color {
-    let mut hit_record = HitRecord::default();
-    if hitable.hit(ray, Interval::new(0.0, f32::INFINITY), &mut hit_record) {
-        return (hit_record.normal + vector![1.0,1.0,1.0]) / 2.0;
-    };
-
-    let unit_direction = ray.direction / ray.direction.norm();
-    let a = 0.5 * (unit_direction.y + 1.0);
-    vector![1.0,1.0,1.0].lerp(&vector![0.5,0.7,1.0], a)
-}
 
 
 struct Interval {
@@ -251,3 +199,86 @@ impl Interval {
 
 const empty: Interval =  Interval{min: f32::INFINITY, max:-f32::INFINITY};
 const universal: Interval =  Interval{min:-f32::INFINITY, max:f32::INFINITY};
+
+struct Camera {
+    //Image 
+    aspect_ratio: f32,
+    image_width: u32,
+    image_height: u32,
+    center: Vector3<f32>,
+    pixel_start: Vector3<f32>,
+    pixel_delta_u: Vector3<f32>,
+    pixel_delta_v: Vector3<f32>,
+}
+
+impl Camera {
+    fn new(aspect_ratio: f32, image_width: u32) -> Self {
+        //Calculate image height: 1) round down 2) ensure at least 1
+        let image_height = (image_width as f32/ aspect_ratio) as i32;
+        let image_height: u32 = if image_height < 1 {1} else {image_height as u32};
+
+        let center = vector![0.0,0.0,0.0];
+
+        //Determine viewport dimensions
+        let focal_length = 1.0;
+        let viewport_height = 2.0;
+        let viewport_width = viewport_height * ((image_width as f32) / (image_height as f32));
+
+        //Calculate vectors across the horizontal and down vertical viewport edges
+        let viewport_u: Point = vector![viewport_width, 0.0, 0.0];
+        let viewport_v: Point = vector![0.0, -viewport_height, 0.0];
+
+        //Calculate horizontal and vertical delta (pixel size)
+        let pixel_delta_u: Direction = viewport_u / (image_width as f32);
+        let pixel_delta_v: Direction = viewport_v / (image_height as f32);
+
+        //Calculate location of upper left pixel
+        let viewport_start = 
+            center.clone()
+            - vector![0.0, 0.0, focal_length]
+            - (viewport_u / 2.0)
+            - (viewport_v / 2.0);
+    
+        let pixel_start =
+            viewport_start + 0.5 * (pixel_delta_u + pixel_delta_v);
+
+        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v}
+    }
+
+    fn render(&self, world: &dyn Hittable) {
+        //Render
+        let mut imgbuf = image::ImageBuffer::new(self.image_width, self.image_height);
+        
+        println!("Started generating image of size {} * {}",self.image_width, self.image_height);
+
+        for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
+            let pixel_center = self.pixel_start + (x as f32 * self.pixel_delta_u) + (y as f32 * self.pixel_delta_v);
+            let ray_direction: Direction = pixel_center - self.center;
+
+            let ray = Ray::new(self.center, ray_direction);
+
+            *pixel = color_to_rgb(Camera::ray_color(&ray,world));
+        }
+
+        imgbuf.save("image.png").unwrap();
+
+        println!("Finished generating");
+    }
+
+    fn initialize(&self) {
+
+    }
+
+    
+    fn ray_color(ray: &Ray, hittable: &dyn Hittable) -> Color {
+        let mut hit_record = HitRecord::default();
+
+        if hittable.hit(ray, Interval::new(0.0, f32::INFINITY), &mut hit_record) {
+            return (hit_record.normal + vector![1.0,1.0,1.0]) / 2.0;
+        };
+
+        let unit_direction = ray.direction / ray.direction.norm();
+        let a = 0.5 * (unit_direction.y + 1.0);
+        vector![1.0,1.0,1.0].lerp(&vector![0.5,0.7,1.0], a)
+    } 
+}
