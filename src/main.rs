@@ -10,9 +10,9 @@ fn main() {
     let mut world = HittableCollection::new();
 
     let matterial_ground = Rc::new(Lambertian::new(&vector![0.8,0.8,0.0]));
-    let matterial_center = Rc::new(Dielectric::new(1.5));
+    let matterial_center = Rc::new(Lambertian::new(&vector![0.1,0.2,0.5]));
     let matterial_left = Rc::new(Dielectric::new(1.5));
-    let matterial_right = Rc::new(Metal::new(&vector![0.8,0.6,0.2], 1.0));
+    let matterial_right = Rc::new(Metal::new(&vector![0.8,0.6,0.2], 0.0));
 
 
     world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5,  matterial_center )));
@@ -249,11 +249,11 @@ impl Camera {
         let pixel_start =
             viewport_start + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-        let samples_per_pixel = 100;
+        let samples_per_pixel = 10;
 
         let rng = rand::thread_rng();
 
-        let max_depth = 50;
+        let max_depth = 10;
 
         Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng, max_depth}
     }
@@ -445,9 +445,21 @@ impl Material for Dielectric {
         let refraction_ratio = if hit_record.front_face {1.0 / self.index_of_refraction} else {self.index_of_refraction};
 
         let unit_direction = vec_unit(&ray.direction);
-        let refracted = refract(&unit_direction, &hit_record.normal, refraction_ratio,1.0);
+        
+        let cos_theta = (-unit_direction.dot(&hit_record.normal)).min(1.0);
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
 
-        *scattered = Ray::new(hit_record.point, refracted);
+        let cannot_refract = refraction_ratio * sin_theta > 1.0;
+        
+        let direction = 
+            if cannot_refract {
+                reflect(&unit_direction, &hit_record.normal)
+            } else {
+                refract(&unit_direction, &hit_record.normal, refraction_ratio, 1.0)
+            };
+        
+        *scattered = Ray::new(hit_record.point, direction);
+
         true
     }
 }
