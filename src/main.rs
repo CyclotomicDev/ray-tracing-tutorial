@@ -31,7 +31,9 @@ fn main() {
         20.0,
         vector![-2.0,2.0,1.0], 
         vector![0.0,0.0,-1.0], 
-        vector![0.0,1.0,0.0]
+        vector![0.0,1.0,0.0],
+        10.0,
+        3.4
     );
     
     camera.render(&world);
@@ -231,15 +233,21 @@ struct Camera {
     samples_per_pixel: usize,
     rng: ThreadRng,
     max_depth: usize,
+
     v_fov: f32, //Vertical field of view in degrees
     look_from: Direction,
     look_at: Direction,
     v_up: Direction,
     basis: Basis,
+
+    defocus_angle: f32,
+    focus_dist: f32,
+    defocus_disk_u: Direction,
+    defocus_disk_v: Direction,
 }
 
 impl Camera {
-    fn new(aspect_ratio: f32, image_width: u32, samples_per_pixel: usize, max_depth: usize, v_fov: f32, look_from: Direction, look_at: Direction, v_up: Direction) -> Self {
+    fn new(aspect_ratio: f32, image_width: u32, samples_per_pixel: usize, max_depth: usize, v_fov: f32, look_from: Direction, look_at: Direction, v_up: Direction, defocus_angle: f32, focus_dist:f32) -> Self {
         //Calculate image height: 1) round down 2) ensure at least 1
         let image_height = (image_width as f32/ aspect_ratio) as i32;
         let image_height: u32 = if image_height < 1 {1} else {image_height as u32};
@@ -249,10 +257,10 @@ impl Camera {
         let dif = look_from.clone() - &look_at;
 
         //Determine viewport dimensions
-        let focal_length = dif.norm();
+        //let focal_length = dif.norm();
         let theta = v_fov * PI / 180.0;
         let h = (theta / 2.0).tan();
-        let viewport_height = 2.0 * h * focal_length;
+        let viewport_height = 2.0 * h * focus_dist;
         let viewport_width = viewport_height * ((image_width as f32) / (image_height as f32));
 
         let w = vec_unit(&dif);
@@ -273,9 +281,14 @@ impl Camera {
         //Calculate location of upper left pixel
         let viewport_start = 
             center.clone()
-            - (focal_length * basis.0)
+            - (focus_dist * basis.0)
             - (viewport_u / 2.0)
             - (viewport_v / 2.0);
+
+        //Calculate camera defoucs disk basis
+        let defocus_radius = focus_dist * (defocus_angle / 2.0 * PI / 180.0).tan();
+        let defocus_disk_u = basis.1 * defocus_radius;
+        let defocus_disk_v = basis.2 * defocus_radius;
     
         let pixel_start =
             viewport_start + 0.5 * (pixel_delta_u + pixel_delta_v);
@@ -283,7 +296,7 @@ impl Camera {
         let rng = rand::thread_rng();
 
 
-        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng, max_depth, v_fov, look_from,look_at,v_up, basis}
+        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng, max_depth, v_fov, look_from,look_at,v_up, basis, defocus_angle, focus_dist, defocus_disk_u,defocus_disk_v}
     }
 
     fn render(&mut self, world: &dyn Hittable) {
@@ -341,12 +354,12 @@ impl Camera {
         vector![1.0,1.0,1.0].lerp(&vector![0.5,0.7,1.0], a)
     } 
 
-    ///Get randomly sample ray from camera at pixel location
+    ///Get randomly sample ray from camera at pixel location, originating from camera defocus disk
     fn get_ray(&mut self, i: u32, j: u32) -> Ray {
         let pixel_center = self.pixel_start + ((i as f32) * self.pixel_delta_u + (j as f32) * self.pixel_delta_v);
         let pixel_sample = pixel_center + self.pixel_sample_square();
 
-        let ray_origin = self.center;
+        let ray_origin = if self.defocus_angle <= 0.0 {self.center} else {self.defocus_disk_sample()};
         let ray_direction = pixel_sample - ray_origin;
 
         Ray::new(ray_origin, ray_direction)
@@ -357,6 +370,11 @@ impl Camera {
         let px = -0.5 + self.rng.gen::<f32>();
         let py = -0.5 + self.rng.gen::<f32>();
         px * self.pixel_delta_u + py * self.pixel_delta_v
+    }
+
+    fn defocus_disk_sample(&mut self) -> Direction {
+        let p = get_random_in_unit_disk(&mut self.rng);
+        self.center + p[0] * &self.defocus_disk_u + p[1] * &self.defocus_disk_v
     }
 }
 
@@ -380,6 +398,13 @@ fn get_random_vec_hemi(rng: &mut ThreadRng, normal: &Vector3<f32>) -> Vector3<f3
         on_unit_sphere
     } else {
         -on_unit_sphere
+    }
+}
+
+fn get_random_in_unit_disk(rng: &mut ThreadRng) -> Direction {
+    loop {
+        let p = vector![rng.gen_range(-1.0..1.0),rng.gen_range(-1.0..1.0),0.0];
+        if p.norm_squared() < 1.0 {return p;};
     }
 }
 
