@@ -195,6 +195,7 @@ dependencies = [
  "num-traits",
  "png",
  "qoi",
+ "rayon",
  "tiff",
 ]
 
@@ -409,6 +410,7 @@ dependencies = [
  "image",
  "nalgebra",
  "rand",
+ "rayon",
 ]
 
 [[package]]

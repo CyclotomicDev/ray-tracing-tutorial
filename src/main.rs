@@ -1,7 +1,9 @@
 use nalgebra::{Vector3, vector};
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use rand::prelude::*;
 use std::f32::consts::PI;
+use rayon::prelude::*;
 
 fn main() {
     
@@ -9,31 +11,57 @@ fn main() {
     //World
     let mut world = HittableCollection::new();
 
-    let material_ground: Rc::<dyn Material> = Rc::new(Lambertian::new(&vector![0.8,0.8,0.0]));
-    let material_center: Rc::<dyn Material> = Rc::new(Lambertian::new(&vector![0.1,0.2,0.5]));
-    let material_left: Rc::<dyn Material> = Rc::new(Dielectric::new(1.5));
-    let material_right: Rc::<dyn Material> = Rc::new(Metal::new(&vector![0.8,0.6,0.2], 0.0));
+    let material_ground: Arc::<dyn Material> = Arc::new(Lambertian::new(&vector![0.5,0.5,0.5]));
+    world.push(Arc::new(Sphere::new(vector![0.0,-1000.0,-1.0], 1000.0,  &(material_ground))));
 
-    //let r = (PI / 4.0).cos();
+    let mut rng = rand::thread_rng();
 
-    world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0,  &(material_ground))));
-    world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5, &material_center)));
-    world.push(Rc::new(Sphere::new(vector![-1.0,0.0,-1.0], 0.5, &material_left)));
-    world.push(Rc::new(Sphere::new(vector![-1.0,0.0,-1.0], -0.4, &material_left)));
-    world.push(Rc::new(Sphere::new(vector![1.0, 0.0,-1.0], 0.5, &material_right)));
+    for a in -11..11 {
+        for b in -11..11 {
+            let center = vector![(a as f32) + 0.9 * rng.gen::<f32>(), 0.2, (b as f32) + 0.9 * rng.gen::<f32>()];
+
+            if (center - &vector![4.0,0.2,0.0]).norm_squared() > 0.9 {
+                let mat_choose: f32 = rng.gen();
+                if mat_choose < 0.8 {
+                    //Diffuse
+                    let albedo = get_random_vec(&mut rng).component_mul(&get_random_vec(&mut rng));
+                    let material: Arc::<dyn Material> = Arc::new(Lambertian::new(&albedo));
+                    world.push(Arc::new(Sphere::new(center, 0.2, &material)));
+                } else if mat_choose < 0.95 {
+                    //Metal
+                    let albedo = get_random_vec_range(&mut rng, 1.0, 0.5);
+                    let fuzz = rng.gen_range(0.0..0.5);
+                    let material: Arc::<dyn Material> = Arc::new(Metal::new(&albedo,fuzz));
+                    world.push(Arc::new(Sphere::new(center, 0.2, &material)));
+                } else {
+                    //Glass
+                    let material: Arc::<dyn Material> = Arc::new(Dielectric::new(1.5));
+                    world.push(Arc::new(Sphere::new(center, 0.2, &material)));
+                }
+            }
+        }
+    }
+
+    let material1: Arc::<dyn Material> = Arc::new(Dielectric::new(1.5));
+    let material2: Arc::<dyn Material> = Arc::new(Lambertian::new(&vector![0.4,0.2,0.1]));
+    let material3: Arc::<dyn Material> = Arc::new(Metal::new(&vector![0.7,0.6,0.5], 0.0));
+
+    world.push(Arc::new(Sphere::new(vector![0.0,1.0,0.0], 1.0, &material1)));
+    world.push(Arc::new(Sphere::new(vector![-4.0,1.0,0.0], -1.0, &material2)));
+    world.push(Arc::new(Sphere::new(vector![4.0, 1.0,0.0], 0.5, &material3)));
     
     
-    let mut camera = Camera::new(
+    let camera = Camera::new(
         16.0 / 9.0, 
-        400,
-        100,
+        1200,
+        500,
         50,
         20.0,
-        vector![-2.0,2.0,1.0], 
-        vector![0.0,0.0,-1.0], 
+        vector![13.0,2.0,3.0], 
+        vector![0.0,0.0,0.0], 
         vector![0.0,1.0,0.0],
-        10.0,
-        3.4
+        0.6,
+        10.0
     );
     
     camera.render(&world);
@@ -60,12 +88,12 @@ impl Ray {
     }
 }
 
-trait Hittable {
-    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Rc<dyn Material>>) -> bool;
+trait Hittable: Sync + Send {
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Arc<dyn Material>>) -> bool;
 }
 
 struct HittableCollection {
-    objects: Vec<Rc<dyn Hittable>>,
+    objects: Vec<Arc<dyn Hittable>>,
 }
 
 impl HittableCollection {
@@ -74,7 +102,7 @@ impl HittableCollection {
         Self{objects}
     }
 
-    fn push(&mut self, object:  Rc<dyn Hittable>) {
+    fn push(&mut self, object:  Arc<dyn Hittable>) {
         self.objects.push(object);
     }
 
@@ -84,7 +112,7 @@ impl HittableCollection {
 }
 
 impl Hittable for HittableCollection {
-    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Rc<dyn Material>>) -> bool {
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Arc<dyn Material>>) -> bool {
         let mut temp_rec = HitRecord::default();
         let mut hit_anything = false;
         let mut closest_current = t_interval.max;
@@ -106,19 +134,19 @@ impl Hittable for HittableCollection {
 struct Sphere {
     pub center: Point,
     pub radius: f32,
-    pub material: Rc<dyn Material>,
+    pub material: Arc<dyn Material>,
 }
 
 impl Sphere {
-    fn new(center: Point, radius: f32, material: &Rc<dyn Material>) -> Self {
-        let material = Rc::clone(material);
+    fn new(center: Point, radius: f32, material: &Arc<dyn Material>) -> Self {
+        let material = Arc::clone(material);
         Self {center, radius, material}
     }
 }
 
 impl Hittable for Sphere
 {
-    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Rc<dyn Material>>) -> bool {
+    fn hit(&self, ray: &Ray, t_interval: Interval, rec: &mut HitRecord, material: &mut Option<Arc<dyn Material>>) -> bool {
         let dif = ray.origin.clone() - self.center;
 
         let a = ray.direction.norm_squared();
@@ -141,7 +169,7 @@ impl Hittable for Sphere
         let outward_normal = (rec.point - self.center) / self.radius;
         rec.set_face_normal(ray, &outward_normal);
 
-        *material = Some(Rc::clone(&self.material));
+        *material = Some(Arc::clone(&self.material));
 
         return true;
     }
@@ -155,7 +183,7 @@ struct HitRecord {
     pub front_face: bool,
 }
 
-struct  HitObserver(HitRecord,Option<Weak<dyn Material>>);
+//struct  HitObserver(HitRecord,Option<Weak<dyn Material>>);
 
 impl HitRecord {
 
@@ -231,7 +259,7 @@ struct Camera {
     pixel_delta_u: Vector3<f32>,
     pixel_delta_v: Vector3<f32>,
     samples_per_pixel: usize,
-    rng: ThreadRng,
+    //rng: ThreadRng,
     max_depth: usize,
 
     v_fov: f32, //Vertical field of view in degrees
@@ -293,46 +321,50 @@ impl Camera {
         let pixel_start =
             viewport_start + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-        let rng = rand::thread_rng();
 
-
-        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng, max_depth, v_fov, look_from,look_at,v_up, basis, defocus_angle, focus_dist, defocus_disk_u,defocus_disk_v}
+        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, max_depth, v_fov, look_from,look_at,v_up, basis, defocus_angle, focus_dist, defocus_disk_u,defocus_disk_v}
     }
 
-    fn render(&mut self, world: &dyn Hittable) {
+    fn render(&self, world: &dyn Hittable) {
 
         let mut imgbuf = image::ImageBuffer::new(self.image_width, self.image_height);
         
         println!("Started generating image of size {} * {}",self.image_width, self.image_height);
 
-        for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-            if x == 0 && y % 10 == 0 {
-                println!("({} {})",x,y);
+        let camera = Arc::new(self);
+
+        //for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
+        imgbuf.par_enumerate_pixels_mut().for_each( |(x, y, pixel)| {
+            //if x == 0 //&& y % 10 == 0 {
+            {
+                //println!("({} {})",x,y);
             }
 
-            let result = (0..(self.samples_per_pixel)).map(|_| {
-                let ray = self.get_ray(x, y);
-                self.ray_color(self.max_depth, &ray, world)
+            let mut rng = rand::thread_rng();
+
+            let result = (0..(camera.samples_per_pixel)).map(|_| {
+                let ray = self.get_ray(x, y, &mut rng);
+                self.ray_color(self.max_depth, &ray, world, &mut rng)
             }).fold(Vector3::<f32>::default(), |acc, x| acc + x) 
             / (self.samples_per_pixel as f32);
 
             *pixel = color_to_rgb(result);
-        }
+        });
 
         imgbuf.save("image.png").unwrap();
 
         println!("Finished generating");
-    }
+}
 
     
-    fn ray_color(&mut self, depth: usize, ray: &Ray, hittable: &dyn Hittable) -> Color {
+    fn ray_color(&self, depth: usize, ray: &Ray, hittable: &dyn Hittable, rng: &mut ThreadRng) -> Color {
         let mut hit_record = HitRecord::default();
 
         if depth <= 0 {
             return vector![0.0, 0.0, 0.0];
         }
 
-        let mut material: Option<Rc<dyn Material>> = None;
+        let mut material: Option<Arc<dyn Material>> = None;
 
         if hittable.hit(ray, Interval::new(0.001, f32::INFINITY), &mut hit_record, &mut material) {
             let mut scattered = Ray::default();
@@ -340,8 +372,8 @@ impl Camera {
 
             let hit_record = hit_record;
 
-            if material.unwrap().scatter(ray, &hit_record, &mut attenuation, &mut scattered, &mut self.rng) {
-                let temp = &self.ray_color(depth - 1, &scattered, hittable);
+            if material.unwrap().scatter(ray, &hit_record, &mut attenuation, &mut scattered, rng) {
+                let temp = &self.ray_color(depth - 1, &scattered, hittable, rng);
                 return attenuation.component_mul(temp);
                 
             } else {
@@ -355,25 +387,25 @@ impl Camera {
     } 
 
     ///Get randomly sample ray from camera at pixel location, originating from camera defocus disk
-    fn get_ray(&mut self, i: u32, j: u32) -> Ray {
+    fn get_ray(&self, i: u32, j: u32, rng: &mut ThreadRng) -> Ray {
         let pixel_center = self.pixel_start + ((i as f32) * self.pixel_delta_u + (j as f32) * self.pixel_delta_v);
-        let pixel_sample = pixel_center + self.pixel_sample_square();
+        let pixel_sample = pixel_center + self.pixel_sample_square(rng);
 
-        let ray_origin = if self.defocus_angle <= 0.0 {self.center} else {self.defocus_disk_sample()};
+        let ray_origin = if self.defocus_angle <= 0.0 {self.center} else {self.defocus_disk_sample(rng)};
         let ray_direction = pixel_sample - ray_origin;
 
         Ray::new(ray_origin, ray_direction)
     }
 
     ///Returns a random point in square surrounding origin of pixel
-    fn pixel_sample_square(&mut self) -> Vector3<f32> {
-        let px = -0.5 + self.rng.gen::<f32>();
-        let py = -0.5 + self.rng.gen::<f32>();
+    fn pixel_sample_square(&self, rng: &mut ThreadRng) -> Vector3<f32> {
+        let px = -0.5 + rng.gen::<f32>();
+        let py = -0.5 + rng.gen::<f32>();
         px * self.pixel_delta_u + py * self.pixel_delta_v
     }
 
-    fn defocus_disk_sample(&mut self) -> Direction {
-        let p = get_random_in_unit_disk(&mut self.rng);
+    fn defocus_disk_sample(&self, rng: &mut ThreadRng) -> Direction {
+        let p = get_random_in_unit_disk(rng);
         self.center + p[0] * &self.defocus_disk_u + p[1] * &self.defocus_disk_v
     }
 }
@@ -381,6 +413,10 @@ impl Camera {
 
 fn get_random_vec(rng: &mut ThreadRng) -> Vector3<f32> {
     vector![rng.gen(), rng.gen(), rng.gen()]
+}
+
+fn get_random_vec_range(rng: &mut ThreadRng, max: f32, min:f32) -> Direction {
+    vector![rng.gen_range(min..max), rng.gen_range(min..max), rng.gen_range(min..max)]
 }
 
 fn get_random_unit(rng: &mut ThreadRng) -> Vector3<f32> {
@@ -412,7 +448,7 @@ fn linear_to_gamma(component: &mut f32) {
     *component = component.sqrt();
 }
 
-trait Material {
+trait Material: Sync + Send {
     fn scatter(&self, ray: &Ray, hit_record: &HitRecord, attenuation: &mut Color, scattered: &mut Ray, rng: &mut ThreadRng) -> bool;
 }
 
