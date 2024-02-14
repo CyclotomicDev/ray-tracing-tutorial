@@ -1,7 +1,7 @@
 use nalgebra::{Vector3, vector};
 use std::rc::{Rc, Weak};
 use rand::prelude::*;
-use std::cmp::min;
+use std::f32::consts::PI;
 
 fn main() {
     
@@ -9,16 +9,19 @@ fn main() {
     //World
     let mut world = HittableCollection::new();
 
-    let matterial_ground = Rc::new(Lambertian::new(&vector![0.8,0.8,0.0]));
-    let matterial_center = Rc::new(Lambertian::new(&vector![0.1,0.2,0.5]));
-    let matterial_left = Rc::new(Dielectric::new(1.5));
-    let matterial_right = Rc::new(Metal::new(&vector![0.8,0.6,0.2], 0.0));
+    let material_left: Rc::<dyn Material> = Rc::new(Lambertian::new(&vector![0.0,0.0,1.0]));
+    let material_right: Rc::<dyn Material> = Rc::new(Lambertian::new(&vector![1.0,0.0,0.0]));
+    //let material_left: Rc::<dyn Material> = Rc::new(Dielectric::new(1.5));
+    //let material_right: Rc::<dyn Material> = Rc::new(Metal::new(&vector![0.8,0.6,0.2], 0.0));
 
+    let r = (PI / 4.0).cos();
 
-    world.push(Rc::new(Sphere::new(vector![0.0,0.0,-1.0], 0.5,  matterial_center )));
-    world.push(Rc::new(Sphere::new(vector![0.0,-100.5,-1.0], 100.0, matterial_ground)));
-    world.push(Rc::new(Sphere::new(vector![-1.0,0.0,-1.0], 0.5, matterial_left)));
-    world.push(Rc::new(Sphere::new(vector![1.0, 0.0,-1.0], 0.5, matterial_right)));
+    world.push(Rc::new(Sphere::new(vector![-r,0.0,-1.0], r,  &(material_left))));
+    world.push(Rc::new(Sphere::new(vector![r,0.0,-1.0], r, &material_right)));
+    //world.push(Rc::new(Sphere::new(vector![-1.0,0.0,-1.0], 0.5, &material_left)));
+    //world.push(Rc::new(Sphere::new(vector![-1.0,0.0,-1.0], -0.4, &material_left)));
+    //world.push(Rc::new(Sphere::new(vector![1.0, 0.0,-1.0], 0.5, &material_right)));
+    
     
     let mut camera = Camera::new(16.0 / 9.0, 400);
     
@@ -96,7 +99,8 @@ struct Sphere {
 }
 
 impl Sphere {
-    fn new(center: Point, radius: f32, material: Rc<dyn Material>) -> Self {
+    fn new(center: Point, radius: f32, material: &Rc<dyn Material>) -> Self {
+        let material = Rc::clone(material);
         Self {center, radius, material}
     }
 }
@@ -216,6 +220,7 @@ struct Camera {
     samples_per_pixel: usize,
     rng: ThreadRng,
     max_depth: usize,
+    v_fov: f32, //Vertical field of view in degrees
 }
 
 impl Camera {
@@ -228,7 +233,10 @@ impl Camera {
 
         //Determine viewport dimensions
         let focal_length = 1.0;
-        let viewport_height = 2.0;
+        let v_fov = 90.0;
+        let theta = v_fov * PI / 180.0;
+        let h = (theta / 2.0).tan();
+        let viewport_height = 2.0 * h * focal_length;
         let viewport_width = viewport_height * ((image_width as f32) / (image_height as f32));
 
         //Calculate vectors across the horizontal and down vertical viewport edges
@@ -249,13 +257,14 @@ impl Camera {
         let pixel_start =
             viewport_start + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-        let samples_per_pixel = 10;
+        let samples_per_pixel = 100;
 
         let rng = rand::thread_rng();
 
-        let max_depth = 10;
+        let max_depth = 50;
 
-        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng, max_depth}
+
+        Self {aspect_ratio, image_width, image_height, center, pixel_start, pixel_delta_u, pixel_delta_v, samples_per_pixel, rng, max_depth, v_fov}
     }
 
     fn render(&mut self, world: &dyn Hittable) {
@@ -395,12 +404,12 @@ fn reflect(v: &Direction, n: &Direction) -> Direction {
     v.clone() - 2.0 * v.dot(n) * n
 }
 
-fn refract(vecIn: &Direction, normal: &Direction, coeffIn: f32, coeffOut: f32) -> Direction{
-    let ratio = coeffIn / coeffOut;
-    let cos_theta = (vecIn.dot(normal)).min(1.0);
-    let vecOut_perp = ratio * (vecIn - cos_theta * normal);
-    let vecOut_para = -(1.0 - vecOut_perp.norm_squared()).sqrt() * normal;
-    vecOut_perp + vecOut_para
+fn refract(vec_in: &Direction, normal: &Direction, coeff_in: f32, coeff_out: f32) -> Direction{
+    let ratio = coeff_in / coeff_out;
+    let cos_theta = (vec_in.dot(normal)).min(1.0);
+    let vec_out_perp = ratio * (vec_in - cos_theta * normal);
+    let vec_out_para = -(1.0 - vec_out_perp.norm_squared()).sqrt() * normal;
+    vec_out_perp + vec_out_para
 }
 
 fn vec_unit(v: &Direction) -> Direction {
@@ -437,6 +446,12 @@ impl Dielectric {
     fn new(index_of_refraction: f32) -> Self {
         Self {index_of_refraction}
     }
+
+    fn reflectance(cosine: f32, ref_index: f32) -> f32 {
+        let mut r0 = (1.0 - ref_index) / (1.0 + ref_index);
+        r0 = r0 * r0;
+        r0 * (1.0 - r0) * (1.0 - cosine).powf(5.0)
+    }
 }
 
 impl Material for Dielectric {
@@ -452,7 +467,7 @@ impl Material for Dielectric {
         let cannot_refract = refraction_ratio * sin_theta > 1.0;
         
         let direction = 
-            if cannot_refract {
+            if cannot_refract || Dielectric::reflectance(cos_theta, refraction_ratio) > rng.gen(){
                 reflect(&unit_direction, &hit_record.normal)
             } else {
                 refract(&unit_direction, &hit_record.normal, refraction_ratio, 1.0)
